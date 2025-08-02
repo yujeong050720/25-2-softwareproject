@@ -1,0 +1,358 @@
+<!-- page2.html -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>P2P Secure Redirect Chat</title>
+  <style>
+    /* 전체 레이아웃 */
+    body {
+      max-width: 800px;
+      margin: 40px auto;
+      font-family: 'Noto Sans KR', sans-serif, Arial, sans-serif;
+      background: #e5e5e5;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 0 16px;
+      box-sizing: border-box;
+      color: rgb(4,9,71);
+      user-select: none;
+    }
+    h1 {
+      font-size: 2.2rem;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    /* 상단 컨트롤 */
+    #controls {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    #controls span { font-weight: normal; }
+    #changeInfoBtn {
+      background: #ffe066;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-weight: 700;
+      color: rgb(4,9,71);
+      transition: background .2s;
+      user-select: auto;
+    }
+    #changeInfoBtn:hover { background: #ffd633; }
+    /* 입력 그룹 */
+    .input-group {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 40px;
+    }
+    #linkInput {
+      flex: 1;
+      max-width: 700px;
+      padding: 10px 12px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 1rem;
+      box-sizing: border-box;
+    }
+    #sendBtn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      background: #ffe066;
+      color: rgb(4,9,71);
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .2s;
+      user-select: none;
+    }
+    #sendBtn:hover { background: #ffd633; }
+    /* 섹션 제목 */
+    h2 {
+      color: rgb(4,9,71);
+      font-weight: 700;
+      margin: 32px 0 12px;
+      user-select: none;
+    }
+    /* 채팅 리스트 */
+    #chat {
+      list-style: none;
+      padding: 0 12px;
+      flex: 1;
+      overflow-y: auto;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      margin-bottom: 40px;
+    }
+    #chat li {
+      margin: 10px 0;
+      display: flex;
+      align-items: center;
+      word-break: break-word;
+    }
+    .user-badge {
+      font-weight: 700;
+      margin-right: 10px;
+      min-width: 80px;
+      color: rgb(4,9,71);
+    }
+    .trusted { color: #2ca02c; }
+    .secure-link {
+      color: rgb(4,9,71);
+      text-decoration: underline;
+      cursor: pointer;
+      flex: 1;
+    }
+    .secure-link:hover { color: #1a2e6f; }
+    #chat small {
+      color: #555;
+      margin-left: 8px;
+      font-weight: 500;
+    }
+    /* 블록체인 디버그 뷰 */
+    #chainView {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      padding: 16px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      user-select: text;
+      margin-bottom: 40px;
+    }
+    @media (max-width: 480px) {
+      #linkInput, #sendBtn { width: 100%; }
+      #controls { flex-direction: column; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <h1>P2P Secure Redirect Chat (오프체인 + 온체인)</h1>
+
+  <div id="controls">
+    닉네임: <span id="nickname">익명</span>
+    지갑: <span id="walletAddress"></span>
+    <button id="changeInfoBtn">정보 변경</button>
+  </div>
+
+  <div class="input-group">
+    <input id="linkInput" type="url" placeholder="https://example.com" />
+    <button id="sendBtn">Send Link</button>
+  </div>
+
+  <h2>Chat</h2>
+  <ul id="chat"></ul>
+
+  <h2>Blockchain Debug</h2>
+  <pre id="chainView"></pre>
+
+  <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gun/lib/webrtc.js"></script>
+  <script type="module">
+    import {
+      connectWallet,
+      sendOnChainClick,
+      voteOnChain,
+      listenClickEvents,
+      listenVoteEvents
+    } from './dapp.js';
+
+    // 사용자 정보
+    const userId    = localStorage.getItem('userId') || '익명';
+    const walletAdr = localStorage.getItem('walletAddress') || '';
+    const clicked   = new Set(JSON.parse(localStorage.getItem('clickedMessages') || '[]'));
+    let trusted     = JSON.parse(localStorage.getItem('trustedUsers') || '[]');
+
+    // UI 초기화
+    document.getElementById('nickname').textContent      = userId;
+    document.getElementById('walletAddress').textContent = walletAdr;
+    document.getElementById('changeInfoBtn')
+      .addEventListener('click', () => window.location.href = 'page1.html');
+
+    // Block & Blockchain 클래스
+    class Block {
+      constructor(idx, ts, data, prevHash) {
+        this.index        = idx;
+        this.timestamp    = ts;
+        this.data         = data;
+        this.previousHash = prevHash;
+        this.hash         = this.calcHash();
+      }
+      calcHash() {
+        const msg = this.index + this.previousHash + this.timestamp + JSON.stringify(this.data);
+        let h = 0;
+        for (const c of msg) { h = ((h << 5) - h) + c.charCodeAt(0); h |= 0; }
+        return (h >>> 0).toString(16);
+      }
+    }
+    class Blockchain {
+      constructor() { this.chain = []; }
+      valid() {
+        for (let i = 1; i < this.chain.length; i++) {
+          const c = this.chain[i], p = this.chain[i-1];
+          if (c.hash !== c.calcHash() || c.previousHash !== p.hash) return false;
+        }
+        return true;
+      }
+    }
+
+    // Gun.js 초기화 (HTTPS relay 권장)
+    const gun = Gun({ peers: ['https://your-relay.example.com/gun'] });
+    const db  = gun.get('p2p-chain');
+    const bc  = new Blockchain();
+    const chatEl  = document.getElementById('chat');
+    const chainEl = document.getElementById('chainView');
+    const inputEl = document.getElementById('linkInput');
+    const sendBtn = document.getElementById('sendBtn');
+
+    // 렌더 함수
+    function render() {
+      chatEl.innerHTML = '';
+      bc.chain
+        .filter(b => b.data.type === 'message')
+        .forEach(b => {
+          const li    = document.createElement('li');
+          const badge = document.createElement('span');
+          badge.textContent = b.data.sender;
+          badge.className   = 'user-badge' +
+            (trusted.includes(b.data.sender) ? ' trusted' : '');
+          li.appendChild(badge);
+
+          const a = document.createElement('a');
+          a.textContent = b.data.url;
+          a.href        = '#';
+          a.className   = 'secure-link';
+          a.onclick     = e => clickHandler(e, b);
+          li.appendChild(a);
+
+          const votes = bc.chain.filter(x =>
+            x.data.type === 'vote' && x.data.target === b.data.sender
+          );
+          const yes = votes.filter(x => x.data.vote).length;
+          const tot = votes.length;
+          const info = document.createElement('small');
+          info.textContent = `#${b.index} [투표:${yes}/${tot}]`;
+          li.appendChild(info);
+
+          chatEl.appendChild(li);
+        });
+
+      chainEl.textContent =
+        JSON.stringify(bc.chain, null, 2) +
+        '\nValid: ' + bc.valid();
+    }
+
+    // 데이터 실시간 수신
+    db.map().on(d => {
+      if (!d || d.index == null) return;
+      if (!bc.chain.find(b => b.index === d.index)) {
+        bc.chain.push(new Block(d.index, d.timestamp, d.data, d.previousHash));
+        render();
+      }
+    });
+
+    // 온체인 이벤트 로깅 (선택)
+    listenClickEvents(evt => console.debug('LinkClicked:', evt));
+    listenVoteEvents(evt => {
+      console.debug('VoteCast:', evt);
+      // evt = { voter, target, support }
+      // if target matches a nickname you could update `trusted` here
+    });
+
+    // 메시지 전송 (Off-chain)
+    sendBtn.addEventListener('click', () => {
+      const url = inputEl.value.trim();
+      if (!url) return alert('URL을 입력하세요');
+      try { new URL(url); }
+      catch { return alert('올바른 URL을 입력하세요'); }
+
+      const idx  = bc.chain.length;
+      const prev = bc.chain[idx-1]?.hash || '0';
+      const blk  = new Block(
+        idx,
+        new Date().toISOString(),
+        {
+          type: 'message',
+          url,
+          sender: userId,
+          senderAddress: walletAdr
+        },
+        prev
+      );
+      db.get(idx).put(blk);
+      bc.chain.push(blk);
+      inputEl.value = '';
+      render();
+    });
+
+    // 링크 클릭 핸들러
+    async function clickHandler(e, block) {
+      e.preventDefault();
+      const { index, data: { sender, senderAddress, url } } = block;
+
+      // 최초 클릭만 처리
+      if (!clicked.has(index)) {
+        clicked.add(index);
+        localStorage.setItem('clickedMessages', JSON.stringify([...clicked]));
+
+        // 자기 메시지엔 투표 스킵
+        if (sender !== userId) {
+          const ok = confirm(`${sender}님을 신뢰하시겠습니까?`);
+          if (!ok) return;
+
+          // Off-chain vote
+          const vidx  = bc.chain.length;
+          const vprev = bc.chain[vidx-1].hash;
+          const vblk  = new Block(
+            vidx,
+            new Date().toISOString(),
+            { type: 'vote', target: sender, voter: userId, vote: ok },
+            vprev
+          );
+          db.get(vidx).put(vblk);
+          bc.chain.push(vblk);
+
+          // On-chain vote
+          await voteOnChain(senderAddress, ok);
+
+          // trusted 업데이트
+          const vs  = bc.chain.filter(x =>
+            x.data.type==='vote' && x.data.target===sender
+          );
+          const y   = vs.filter(x=>x.data.vote).length;
+          const t   = vs.length;
+          if (t >= 10 && y > t - y && !trusted.includes(sender)) {
+            trusted.push(sender);
+            localStorage.setItem('trustedUsers', JSON.stringify(trusted));
+          }
+        }
+      } else {
+        // 이미 클릭된 메시지는 온체인 클릭만
+      }
+
+      // 온체인 클릭 기록
+      await sendOnChainClick(url);
+
+      // 팝업 열기
+      window.open(url, '_blank', 'width=800,height=600');
+    }
+  </script>
+</body>
+</html>
