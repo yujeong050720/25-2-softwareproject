@@ -163,8 +163,10 @@
   <h2>Blockchain Debug</h2>
   <pre id="chainView"></pre>
 
+  <!-- Gun.js & WebRTC -->
   <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/gun/lib/webrtc.js"></script>
+
   <script type="module">
     import {
       connectWallet,
@@ -174,19 +176,27 @@
       listenVoteEvents
     } from './dapp.js';
 
-    // 사용자 정보
+    // 1) Gun.js 초기화 (공용 HTTPS Relay)
+    const gun = Gun({
+      peers: [
+        'https://gun-manhattan.herokuapp.com/gun'
+      ]
+    });
+    const db = gun.get('p2p-chain');
+
+    // 2) 사용자 정보 & 상태
     const userId    = localStorage.getItem('userId') || '익명';
     const walletAdr = localStorage.getItem('walletAddress') || '';
     const clicked   = new Set(JSON.parse(localStorage.getItem('clickedMessages') || '[]'));
     let trusted     = JSON.parse(localStorage.getItem('trustedUsers') || '[]');
 
-    // UI 초기화
+    // 3) UI 초기화
     document.getElementById('nickname').textContent      = userId;
     document.getElementById('walletAddress').textContent = walletAdr;
     document.getElementById('changeInfoBtn')
       .addEventListener('click', () => window.location.href = 'page1.html');
 
-    // Block & Blockchain 클래스
+    // 4) Block & Blockchain 클래스
     class Block {
       constructor(idx, ts, data, prevHash) {
         this.index        = idx;
@@ -212,17 +222,22 @@
         return true;
       }
     }
-
-    // Gun.js 초기화 (HTTPS relay 권장)
-    const gun = Gun({ peers: ['https://your-relay.example.com/gun'] });
-    const db  = gun.get('p2p-chain');
     const bc  = new Blockchain();
     const chatEl  = document.getElementById('chat');
     const chainEl = document.getElementById('chainView');
     const inputEl = document.getElementById('linkInput');
     const sendBtn = document.getElementById('sendBtn');
 
-    // 렌더 함수
+    // 5) 실시간 구독
+    db.map().on(d => {
+      if (!d || d.index == null) return;
+      if (!bc.chain.find(b => b.index === d.index)) {
+        bc.chain.push(new Block(d.index, d.timestamp, d.data, d.previousHash));
+        render();
+      }
+    });
+
+    // 6) 렌더링 함수
     function render() {
       chatEl.innerHTML = '';
       bc.chain
@@ -231,8 +246,7 @@
           const li    = document.createElement('li');
           const badge = document.createElement('span');
           badge.textContent = b.data.sender;
-          badge.className   = 'user-badge' +
-            (trusted.includes(b.data.sender) ? ' trusted' : '');
+          badge.className   = 'user-badge' + (trusted.includes(b.data.sender) ? ' trusted' : '');
           li.appendChild(badge);
 
           const a = document.createElement('a');
@@ -255,45 +269,21 @@
         });
 
       chainEl.textContent =
-        JSON.stringify(bc.chain, null, 2) +
-        '\nValid: ' + bc.valid();
+        JSON.stringify(bc.chain, null, 2) + '\nValid: ' + bc.valid();
     }
 
-    // 데이터 실시간 수신
-    db.map().on(d => {
-      if (!d || d.index == null) return;
-      if (!bc.chain.find(b => b.index === d.index)) {
-        bc.chain.push(new Block(d.index, d.timestamp, d.data, d.previousHash));
-        render();
-      }
-    });
-
-    // 온체인 이벤트 로깅 (선택)
-    listenClickEvents(evt => console.debug('LinkClicked:', evt));
-    listenVoteEvents(evt => {
-      console.debug('VoteCast:', evt);
-      // evt = { voter, target, support }
-      // if target matches a nickname you could update `trusted` here
-    });
-
-    // 메시지 전송 (Off-chain)
+    // 7) 메시지 전송 (Off-chain)
     sendBtn.addEventListener('click', () => {
       const url = inputEl.value.trim();
       if (!url) return alert('URL을 입력하세요');
-      try { new URL(url); }
-      catch { return alert('올바른 URL을 입력하세요'); }
+      try { new URL(url); } catch { return alert('올바른 URL을 입력하세요'); }
 
       const idx  = bc.chain.length;
       const prev = bc.chain[idx-1]?.hash || '0';
       const blk  = new Block(
         idx,
         new Date().toISOString(),
-        {
-          type: 'message',
-          url,
-          sender: userId,
-          senderAddress: walletAdr
-        },
+        { type: 'message', url, sender: userId, senderAddress: walletAdr },
         prev
       );
       db.get(idx).put(blk);
@@ -302,17 +292,15 @@
       render();
     });
 
-    // 링크 클릭 핸들러
+    // 8) 링크 클릭 핸들러 (Off-chain vote + On-chain)
     async function clickHandler(e, block) {
       e.preventDefault();
       const { index, data: { sender, senderAddress, url } } = block;
 
-      // 최초 클릭만 처리
       if (!clicked.has(index)) {
         clicked.add(index);
         localStorage.setItem('clickedMessages', JSON.stringify([...clicked]));
 
-        // 자기 메시지엔 투표 스킵
         if (sender !== userId) {
           const ok = confirm(`${sender}님을 신뢰하시겠습니까?`);
           if (!ok) return;
@@ -343,16 +331,18 @@
             localStorage.setItem('trustedUsers', JSON.stringify(trusted));
           }
         }
-      } else {
-        // 이미 클릭된 메시지는 온체인 클릭만
       }
 
-      // 온체인 클릭 기록
+      // On-chain click 기록
       await sendOnChainClick(url);
 
       // 팝업 열기
       window.open(url, '_blank', 'width=800,height=600');
     }
+
+    // 9) 온체인 이벤트 리스닝 (로깅용)
+    listenClickEvents(evt => console.debug('LinkClicked:', evt));
+    listenVoteEvents(evt => console.debug('VoteCast:', evt));
   </script>
 </body>
 </html>
